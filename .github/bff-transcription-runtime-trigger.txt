@@ -1,0 +1,2 @@
+Temporary build trigger for the BFF interview transcription runtime.
+No interview audio or private business data is included in this repository.
