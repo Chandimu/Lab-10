@@ -1,0 +1,98 @@
+name: BFF Transcription Runtime
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git curl ca-certificates
+
+      - name: Build whisper.cpp CLI
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.9.2 https://github.com/ggml-org/whisper.cpp.git whisper.cpp
+          cmake -S whisper.cpp -B whisper.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DGGML_NATIVE=OFF
+          cmake --build whisper.cpp/build --config Release --target whisper-cli -j"$(nproc)"
+          mkdir -p runtime/bin
+          cp whisper.cpp/build/bin/whisper-cli runtime/bin/
+          chmod +x runtime/bin/whisper-cli
+          runtime/bin/whisper-cli --help > runtime/whisper-cli-help.txt 2>&1 || true
+          ldd runtime/bin/whisper-cli > runtime/ldd.txt || true
+          sha256sum runtime/bin/whisper-cli > runtime/SHA256SUMS.txt
+
+      - name: Download large-v3-turbo Q5 model
+        run: |
+          set -euo pipefail
+          mkdir -p model-large-v3-turbo-q5
+          whisper.cpp/models/download-ggml-model.sh large-v3-turbo-q5_0 model-large-v3-turbo-q5
+          sha256sum model-large-v3-turbo-q5/* > model-large-v3-turbo-q5/SHA256SUMS.txt
+
+      - name: Download medium Q5 comparison model
+        run: |
+          set -euo pipefail
+          mkdir -p model-medium-q5
+          whisper.cpp/models/download-ggml-model.sh medium-q5_0 model-medium-q5
+          sha256sum model-medium-q5/* > model-medium-q5/SHA256SUMS.txt
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Download diarization wheels for local installation
+        run: |
+          set -euo pipefail
+          mkdir -p wheels
+          python -m pip install --upgrade pip
+          python -m pip download --only-binary=:all: --dest wheels \
+            sherpa-onnx==1.13.4 onnxruntime numpy soundfile
+          python -m pip download --only-binary=:all: --dest wheels \
+            scikit-learn scipy || true
+          ls -lh wheels > wheels/MANIFEST.txt
+          sha256sum wheels/*.whl > wheels/SHA256SUMS.txt
+
+      - name: Upload whisper runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-whisper-runtime-linux-x64
+          path: runtime
+          retention-days: 1
+
+      - name: Upload large-v3-turbo model
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-model-large-v3-turbo-q5
+          path: model-large-v3-turbo-q5
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload medium comparison model
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-model-medium-q5
+          path: model-medium-q5
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload diarization wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-diarization-wheels-py313
+          path: wheels
+          retention-days: 1
