@@ -12,72 +12,123 @@ permissions:
   contents: read
 
 jobs:
-  package-model-parts:
+  package-faster-whisper:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
-      - name: Download whisper.cpp model helper
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Download Faster-Whisper wheels
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch v1.9.2 https://github.com/ggml-org/whisper.cpp.git whisper.cpp
+          python -m pip install --upgrade pip
+          mkdir -p wheels
+          python -m pip download --only-binary=:all: --dest wheels \
+            faster-whisper==1.2.1 \
+            ctranslate2==4.8.1 \
+            av==18.0.0
+          ls -lh wheels | tee wheels/MANIFEST.txt
+          sha256sum wheels/*.whl | tee wheels/SHA256SUMS.txt
 
-      - name: Download and split large-v3-turbo Q5 model
+      - name: Install downloader
         run: |
           set -euo pipefail
-          mkdir -p large-parts manifests
-          whisper.cpp/models/download-ggml-model.sh large-v3-turbo-q5_0 .
-          sha256sum ggml-large-v3-turbo-q5_0.bin | tee manifests/large-original.sha256
-          split -b 300M -d -a 2 ggml-large-v3-turbo-q5_0.bin large-parts/ggml-large-v3-turbo-q5_0.bin.part-
-          sha256sum large-parts/* | tee manifests/large-parts.sha256
-          test -f large-parts/ggml-large-v3-turbo-q5_0.bin.part-00
-          test -f large-parts/ggml-large-v3-turbo-q5_0.bin.part-01
+          python -m pip install huggingface_hub==0.34.4
 
-      - name: Download and split medium Q5 comparison model
+      - name: Download exact Faster-Whisper medium snapshot
+        env:
+          HF_HUB_DISABLE_XET: '1'
         run: |
           set -euo pipefail
-          mkdir -p medium-parts
-          whisper.cpp/models/download-ggml-model.sh medium-q5_0 .
-          sha256sum ggml-medium-q5_0.bin | tee manifests/medium-original.sha256
-          split -b 300M -d -a 2 ggml-medium-q5_0.bin medium-parts/ggml-medium-q5_0.bin.part-
-          sha256sum medium-parts/* | tee manifests/medium-parts.sha256
-          test -f medium-parts/ggml-medium-q5_0.bin.part-00
-          test -f medium-parts/ggml-medium-q5_0.bin.part-01
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          path = snapshot_download(
+              repo_id='Systran/faster-whisper-medium',
+              revision='08e178d48790749d25932bbc082711ddcfdfbc4f',
+              local_dir='fw-model',
+              local_dir_use_symlinks=False,
+          )
+          print(path)
+          PY
+          test -f fw-model/model.bin
+          echo '9b45e1009dcc4ab601eff815b61d80e60ce3fd8c74c1a14f4a282258286b51ae  fw-model/model.bin' | sha256sum -c -
+          mkdir -p fw-metadata fw-parts manifests
+          find fw-model -maxdepth 1 -type f ! -name model.bin -exec cp {} fw-metadata/ \;
+          split -b 280M -d -a 2 fw-model/model.bin fw-parts/model.bin.part-
+          sha256sum fw-model/model.bin | tee manifests/model-original.sha256
+          sha256sum fw-parts/* | tee manifests/model-parts.sha256
+          find fw-model -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort | tee manifests/model-files.tsv
+          ls -lh fw-parts
 
-      - name: Upload large model part 00
+      - name: Upload Python wheels
         uses: actions/upload-artifact@v4
         with:
-          name: bff-large-v3-turbo-q5-part-00
-          path: large-parts/ggml-large-v3-turbo-q5_0.bin.part-00
+          name: bff-faster-whisper-wheels-py313
+          path: wheels
+          retention-days: 1
+
+      - name: Upload model metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-faster-whisper-medium-metadata
+          path: fw-metadata
+          retention-days: 1
+
+      - name: Upload model part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-faster-whisper-medium-part-00
+          path: fw-parts/model.bin.part-00
           compression-level: 0
           retention-days: 1
 
-      - name: Upload large model part 01
+      - name: Upload model part 01
         uses: actions/upload-artifact@v4
         with:
-          name: bff-large-v3-turbo-q5-part-01
-          path: large-parts/ggml-large-v3-turbo-q5_0.bin.part-01
+          name: bff-faster-whisper-medium-part-01
+          path: fw-parts/model.bin.part-01
           compression-level: 0
           retention-days: 1
 
-      - name: Upload medium model part 00
+      - name: Upload model part 02
         uses: actions/upload-artifact@v4
         with:
-          name: bff-medium-q5-part-00
-          path: medium-parts/ggml-medium-q5_0.bin.part-00
+          name: bff-faster-whisper-medium-part-02
+          path: fw-parts/model.bin.part-02
           compression-level: 0
           retention-days: 1
 
-      - name: Upload medium model part 01
+      - name: Upload model part 03
         uses: actions/upload-artifact@v4
         with:
-          name: bff-medium-q5-part-01
-          path: medium-parts/ggml-medium-q5_0.bin.part-01
+          name: bff-faster-whisper-medium-part-03
+          path: fw-parts/model.bin.part-03
           compression-level: 0
           retention-days: 1
 
-      - name: Upload checksums
+      - name: Upload model part 04
         uses: actions/upload-artifact@v4
         with:
-          name: bff-model-checksums
+          name: bff-faster-whisper-medium-part-04
+          path: fw-parts/model.bin.part-04
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload model part 05 if present
+        if: ${{ hashFiles('fw-parts/model.bin.part-05') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-faster-whisper-medium-part-05
+          path: fw-parts/model.bin.part-05
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload model checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-faster-whisper-medium-checksums
           path: manifests
           retention-days: 1
