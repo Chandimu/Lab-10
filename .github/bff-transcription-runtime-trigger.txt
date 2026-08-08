@@ -1,3 +1,1 @@
-Temporary build trigger for the BFF interview transcription runtime.
-No interview audio or private business data is included in this repository.
-Trigger revision: faster-whisper-small-draft-1.
+Temporary runtime build completed and local transcription artifacts retrieved. No interview audio or private business data was uploaded.
