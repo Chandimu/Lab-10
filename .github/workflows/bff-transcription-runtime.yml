@@ -12,123 +12,84 @@ permissions:
   contents: read
 
 jobs:
-  package-faster-whisper:
+  package-small-model:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
-      - name: Download Faster-Whisper wheels
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          mkdir -p wheels
-          python -m pip download --only-binary=:all: --dest wheels \
-            faster-whisper==1.2.1 \
-            ctranslate2==4.8.1 \
-            av==18.0.0
-          ls -lh wheels | tee wheels/MANIFEST.txt
-          sha256sum wheels/*.whl | tee wheels/SHA256SUMS.txt
-
       - name: Install downloader
         run: |
           set -euo pipefail
           python -m pip install huggingface_hub==0.34.4
 
-      - name: Download exact Faster-Whisper medium snapshot
+      - name: Download Faster-Whisper small
         env:
           HF_HUB_DISABLE_XET: '1'
         run: |
           set -euo pipefail
           python - <<'PY'
-          from huggingface_hub import snapshot_download
-          path = snapshot_download(
-              repo_id='Systran/faster-whisper-medium',
-              revision='08e178d48790749d25932bbc082711ddcfdfbc4f',
-              local_dir='fw-model',
+          from huggingface_hub import HfApi, snapshot_download
+          api = HfApi()
+          info = api.model_info('Systran/faster-whisper-small')
+          print('revision', info.sha)
+          snapshot_download(
+              repo_id='Systran/faster-whisper-small',
+              revision=info.sha,
+              local_dir='fw-small',
               local_dir_use_symlinks=False,
           )
-          print(path)
+          open('revision.txt', 'w', encoding='utf-8').write(info.sha + '\n')
           PY
-          test -f fw-model/model.bin
-          echo '9b45e1009dcc4ab601eff815b61d80e60ce3fd8c74c1a14f4a282258286b51ae  fw-model/model.bin' | sha256sum -c -
-          mkdir -p fw-metadata fw-parts manifests
-          find fw-model -maxdepth 1 -type f ! -name model.bin -exec cp {} fw-metadata/ \;
-          split -b 280M -d -a 2 fw-model/model.bin fw-parts/model.bin.part-
-          sha256sum fw-model/model.bin | tee manifests/model-original.sha256
-          sha256sum fw-parts/* | tee manifests/model-parts.sha256
-          find fw-model -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort | tee manifests/model-files.tsv
-          ls -lh fw-parts
+          test -f fw-small/model.bin
+          mkdir -p small-metadata small-parts manifests
+          find fw-small -maxdepth 1 -type f ! -name model.bin -exec cp {} small-metadata/ \;
+          cp revision.txt small-metadata/
+          split -b 240M -d -a 2 fw-small/model.bin small-parts/model.bin.part-
+          sha256sum fw-small/model.bin | tee manifests/model-original.sha256
+          sha256sum small-parts/* | tee manifests/model-parts.sha256
+          find fw-small -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort | tee manifests/model-files.tsv
+          cp revision.txt manifests/
+          ls -lh small-parts
 
-      - name: Upload Python wheels
+      - name: Upload small metadata
         uses: actions/upload-artifact@v4
         with:
-          name: bff-faster-whisper-wheels-py313
-          path: wheels
+          name: bff-faster-whisper-small-metadata
+          path: small-metadata
           retention-days: 1
 
-      - name: Upload model metadata
+      - name: Upload small model part 00
         uses: actions/upload-artifact@v4
         with:
-          name: bff-faster-whisper-medium-metadata
-          path: fw-metadata
-          retention-days: 1
-
-      - name: Upload model part 00
-        uses: actions/upload-artifact@v4
-        with:
-          name: bff-faster-whisper-medium-part-00
-          path: fw-parts/model.bin.part-00
+          name: bff-faster-whisper-small-part-00
+          path: small-parts/model.bin.part-00
           compression-level: 0
           retention-days: 1
 
-      - name: Upload model part 01
+      - name: Upload small model part 01
         uses: actions/upload-artifact@v4
         with:
-          name: bff-faster-whisper-medium-part-01
-          path: fw-parts/model.bin.part-01
+          name: bff-faster-whisper-small-part-01
+          path: small-parts/model.bin.part-01
           compression-level: 0
           retention-days: 1
 
-      - name: Upload model part 02
+      - name: Upload small model part 02 if present
+        if: ${{ hashFiles('small-parts/model.bin.part-02') != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: bff-faster-whisper-medium-part-02
-          path: fw-parts/model.bin.part-02
+          name: bff-faster-whisper-small-part-02
+          path: small-parts/model.bin.part-02
           compression-level: 0
           retention-days: 1
 
-      - name: Upload model part 03
+      - name: Upload small checksums
         uses: actions/upload-artifact@v4
         with:
-          name: bff-faster-whisper-medium-part-03
-          path: fw-parts/model.bin.part-03
-          compression-level: 0
-          retention-days: 1
-
-      - name: Upload model part 04
-        uses: actions/upload-artifact@v4
-        with:
-          name: bff-faster-whisper-medium-part-04
-          path: fw-parts/model.bin.part-04
-          compression-level: 0
-          retention-days: 1
-
-      - name: Upload model part 05 if present
-        if: ${{ hashFiles('fw-parts/model.bin.part-05') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: bff-faster-whisper-medium-part-05
-          path: fw-parts/model.bin.part-05
-          compression-level: 0
-          retention-days: 1
-
-      - name: Upload model checksums
-        uses: actions/upload-artifact@v4
-        with:
-          name: bff-faster-whisper-medium-checksums
+          name: bff-faster-whisper-small-checksums
           path: manifests
           retention-days: 1
